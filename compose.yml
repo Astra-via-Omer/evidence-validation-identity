@@ -1,0 +1,10 @@
+services:
+  identity:
+    build: .
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - identity_data:/pb/pb_data
+    restart: unless-stopped
+volumes:
+  identity_data:
