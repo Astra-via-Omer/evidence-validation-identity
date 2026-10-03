@@ -4,9 +4,12 @@ set -euo pipefail
 image=${1:?Pass the checked Artifact Registry image tagged by commit SHA}
 [[ "$image" =~ ^[a-z0-9-]+-docker\.pkg\.dev/[a-z0-9-]+/[a-z0-9-]+/evidence-validation-identity:[a-f0-9]{40}$ ]] || { echo 'Invalid image reference'; exit 1; }
 command -v docker >/dev/null
-command -v gcloud >/dev/null
+command -v jq >/dev/null
 registry=${image%%/*}
-gcloud auth configure-docker "$registry" --quiet
+credential_dir=$(mktemp -d)
+export DOCKER_CONFIG="$credential_dir"
+trap 'rm -rf "$credential_dir"' EXIT
+curl --fail --silent -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token | jq -r .access_token | docker login -u oauth2accesstoken --password-stdin "$registry" >/dev/null
 docker pull "$image"
 install -d -o 10001 -g 10001 /var/lib/evidence-validation/pb_data
 install -d -m 0700 /var/backups/evidence-validation

@@ -10,6 +10,11 @@ on:
         type: boolean
         required: true
         default: false
+      publish_only:
+        description: Publish the checked image for initial VM provisioning without replacing a running service
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 defaults:
@@ -49,7 +54,7 @@ jobs:
           retention-days: 1
   deploy:
     needs: check
-    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' && (github.event_name == 'push' || inputs.security_reviewed)
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' && (github.event_name == 'push' || inputs.security_reviewed || inputs.publish_only)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -70,16 +75,21 @@ jobs:
           VM: ${{ vars.IDENTITY_VM_NAME }}
           ZONE: ${{ vars.IDENTITY_VM_ZONE }}
         run: |
-          for variable in PROJECT REGION REPOSITORY VM ZONE; do
+          for variable in PROJECT REGION REPOSITORY; do
             [[ "${!variable}" =~ ^[a-z0-9-]+$ ]] || { echo "Missing or invalid repository variable: $variable"; exit 1; }
           done
+          if [[ "${{ inputs.publish_only }}" != "true" ]]; then
+            for variable in VM ZONE; do
+              [[ "${!variable}" =~ ^[a-z0-9-]+$ ]] || { echo "Missing or invalid repository variable: $variable"; exit 1; }
+            done
+          fi
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
-      - name: Push and deploy checked identity image
+      - name: Publish checked identity image
         env:
           PROJECT: ${{ vars.GCP_PROJECT_ID }}
           REGION: ${{ vars.GCP_REGION }}
@@ -91,4 +101,14 @@ jobs:
           image="$REGION-docker.pkg.dev/$PROJECT/$REPOSITORY/evidence-validation-identity:$GITHUB_SHA"
           docker tag "evidence-validation-identity:$GITHUB_SHA" "$image"
           docker push "$image"
+      - name: Replace identity service on persistent VM
+        if: inputs.publish_only != true
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+          VM: ${{ vars.IDENTITY_VM_NAME }}
+          ZONE: ${{ vars.IDENTITY_VM_ZONE }}
+        run: |
+          image="$REGION-docker.pkg.dev/$PROJECT/$REPOSITORY/evidence-validation-identity:$GITHUB_SHA"
           gcloud compute ssh "$VM" --project="$PROJECT" --zone="$ZONE" --tunnel-through-iap --quiet --command="sudo /opt/evidence-validation/deploy-image.sh '$image'"
